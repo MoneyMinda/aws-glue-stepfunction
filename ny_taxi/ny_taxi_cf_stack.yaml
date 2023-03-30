@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Stack template for new york crime analysis job
+Parameters:
+  ProjectNameParam:
+    Type: String
+    Description: Project name tag
+    Default: "glue-stepfunction"
+
+  EnvParam:
+    Type: String
+    Description: Environment tag
+    Default: "dev"
+    AllowedValues:
+      - "prod"
+      - "dev"
+      - "qa"
+      - "test"
+
+  ResourceRandom:
+    Type: String
+    Description: "Characters appended to resource name to differentiate stack resources"
+
+  JobName:
+    Description: "Name of job"
+    Type: String
+    Default: "ny_taxi"
+
+  ProjectBucket:
+    Description: "Name of S3 bucket where glue scripts are stored"
+    Type: String
+    Default: !Sub "s3://${ProjectNameParam}-${ResourceRandom}-${EnvParam}-${AWS::Region}"
+
+  JobFolder:
+    Description: "S3 path for job objects"
+    Type: String
+    Default: !Sub "s3://${ProjectBucket}/${JobName}/"
+
+  GlueAssetsFolder:
+    Description: "S3 path to glue scripts"
+    Type: String
+    Default: !Sub "s3://${JobFolder}/glue-assets/"
+
+  StateFunctionFolder:
+    Description: "S3 path to step function scripts"
+    Type: String
+    Default: !Sub "s3://${JobFolder}/step-function/"
+
+  DataFolder:
+    Description: "S3 path to job data"
+    Type: String
+    Default: "s3://${ProjectNameParam}-data-${ResourceRandom}-${EnvParam}-${AWS::Region}"
+
+  EltRole:
+    Description: "ARN of role for executing Glue jobs"
+    Type: String
+
+  JobConfigTable:
+    Description: ""
+    Type: String
+
+  JobNotificationTopic:
+    Description: ""
+    Type: String
+
+
+Resources:
+  GlueJob:
+    Type: "AWS::Glue::Job"
+    Properties:
+      Command:
+        Name: "glueetl"
+        PythonVersion: "3.9"
+        ScriptLocation: !Sub "${GlueAssetsFolder}/scripts/${JobName}.py"
+      DefaultArguments:
+        - Key: "--datalake-formats"
+          Value: "iceberg"
+        - Key: "--enable-auto-scaling"
+          Value: true
+        - Key: "--enable-continuous-log-filter"
+          Value:  true
+        - Key: "--enable-job-insights"
+          Value: true
+        - Key: "--enable-metrics"
+          Value: true
+        - Key: "--enable-spark-ui"
+          Value: true
+        - Key: "--job-language"
+          Value: "python"
+        - Key: "--spark-event-logs-path"
+          Value: !Sub "${GlueAssetsFolder}/event-logs/"
+        - Key: "--TempDir"
+          Value: !Sub "${GlueAssetsFolder}/temp/"
+      Description: "ELT job for NYC taxis"
+      ExecutionClass: "STANDARD"
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      GlueVersion: "4.0"
+      MaxCapacity: 5
+      MaxRetries: 0
+      Name: !Sub "${ProjectNameParam}-${JobName}-${ResourceRandom}-${EnvParam}"
+      NonOverridableArguments:
+        - Key: "--datalake-formats"
+          Value: "iceberg"
+        - Key: "--enable-auto-scaling"
+          Value: true
+        - Key: "--enable-continuous-log-filter"
+          Value: true
+        - Key: "--enable-job-insights"
+          Value: true
+        - Key: "--enable-metrics"
+          Value: true
+        - Key: "--enable-spark-ui"
+          Value: true
+        - Key: "--job-language"
+          Value: "python"
+        - Key: "--spark-event-logs-path"
+          Value: !Sub "${GlueAssetsFolder}/event-logs/"
+        - Key: "--TempDir"
+          Value: !Sub "${GlueAssetsFolder}/temp/"
+      NotificationProperty:
+        NotifyDelayAfter: 2
+      NumberOfWorkers: 2
+      Role: !Ref EltRole
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectNameParam}-${JobName}-${ResourceRandom}-${EnvParam}"
+        - Key: project
+          Value: !Ref ProjectNameParam
+        - Key: env
+          Value: !Ref EnvParam
+      WorkerType: "Standard"
+
+  JobStateMachine:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      DefinitionS3Location:
+        Bucket: !Ref ProjectBucket
+        Key: !Sub "${JobName}/step-function/${JobName}-state-machine.json"
+      DefinitionSubstitutions:
+        RoleArn: !Ref EltRole
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt CloudWatchLogsLogGroup.Arn
+        IncludeExecutionData: true
+        Level: "ALL"
+      RoleArn: !Ref EltRole
+      StateMachineName: !Sub "${ProjectNameParam}-${JobName}-state-machine-${ResourceRandom}-${EnvParam}"
+      StateMachineType: "STANDARD"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectNameParam}-${JobName}-state-machine-${ResourceRandom}-${EnvParam}"
+        - Key: project
+          Value: !Ref ProjectNameParam
+        - Key: env
+          Value: !Ref EnvParam
+      TracingConfiguration:
+        Enabled: true
+
