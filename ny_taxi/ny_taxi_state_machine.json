@@ -1,0 +1,231 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "PutObject",
+  "States": {
+    "PutObject": {
+      "Type": "Task",
+      "Parameters": {
+        "Body": {},
+        "Bucket": "MyData",
+        "Key": "MyData"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+      "Next": "PutItem"
+    },
+    "PutItem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "MyDynamoDBTable",
+        "Item": {
+          "Column": {
+            "S": "MyEntry"
+          }
+        }
+      },
+      "Next": "Glue StartJobRun"
+    },
+    "Glue StartJobRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun",
+      "Parameters": {
+        "JobName": "myJobName"
+      },
+      "Next": "DynamoDB UpdateItem"
+    },
+    "DynamoDB UpdateItem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "MyDynamoDBTable",
+        "Key": {
+          "Column": {
+            "S": "MyEntry"
+          }
+        },
+        "UpdateExpression": "SET MyKey = :myValueRef",
+        "ExpressionAttributeValues": {
+          ":myValueRef": {
+            "S": "MyValue"
+          }
+        }
+      },
+      "Next": "GetRecords"
+    },
+    "GetRecords": {
+      "Type": "Task",
+      "Next": "Lambda Invoke",
+      "Parameters": {
+        "ShardIterator": "MyData"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:dynamodbstreams:getRecords"
+    },
+    "Lambda Invoke": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Choice"
+    },
+    "Choice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Success"
+        }
+      ],
+      "Default": "Glue StartJobRun (1)"
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Glue StartJobRun (1)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun",
+      "Parameters": {
+        "JobName": "myJobName"
+      },
+      "Next": "DynamoDB UpdateItem (1)"
+    },
+    "DynamoDB UpdateItem (1)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "MyDynamoDBTable",
+        "Key": {
+          "Column": {
+            "S": "MyEntry"
+          }
+        },
+        "UpdateExpression": "SET MyKey = :myValueRef",
+        "ExpressionAttributeValues": {
+          ":myValueRef": {
+            "S": "MyValue"
+          }
+        }
+      },
+      "Next": "Lambda Invoke (1)"
+    },
+    "Lambda Invoke (1)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Choice (1)"
+    },
+    "Choice (1)": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Success (1)"
+        }
+      ],
+      "Default": "Glue StartJobRun (2)"
+    },
+    "Success (1)": {
+      "Type": "Succeed"
+    },
+    "Glue StartJobRun (2)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun",
+      "Parameters": {
+        "JobName": "myJobName"
+      },
+      "Next": "DynamoDB UpdateItem (2)"
+    },
+    "DynamoDB UpdateItem (2)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "MyDynamoDBTable",
+        "Key": {
+          "Column": {
+            "S": "MyEntry"
+          }
+        },
+        "UpdateExpression": "SET MyKey = :myValueRef",
+        "ExpressionAttributeValues": {
+          ":myValueRef": {
+            "S": "MyValue"
+          }
+        }
+      },
+      "Next": "Lambda Invoke (2)"
+    },
+    "Lambda Invoke (2)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Choice (2)"
+    },
+    "Choice (2)": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Success (2)"
+        }
+      ],
+      "Default": "SNS Publish"
+    },
+    "Success (2)": {
+      "Type": "Succeed"
+    },
+    "SNS Publish": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "Message.$": "$"
+      },
+      "Next": "Fail"
+    },
+    "Fail": {
+      "Type": "Fail"
+    }
+  }
+}

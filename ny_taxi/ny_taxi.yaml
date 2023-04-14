@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Stack template for new york crime analysis job
+Parameters:
+  ProjectNameParam:
+    Type: String
+    Description: Project name tag
+    Default: "glue-stepfunction"
+
+  EnvParam:
+    Type: String
+    Description: Environment tag
+    Default: "dev"
+    AllowedValues:
+      - "prod"
+      - "dev"
+      - "qa"
+      - "test"
+
+  ResourceRandom:
+    Type: String
+    Description: "Characters appended to resource name to differentiate stack resources"
+
+  JobName:
+    Description: "Name of job"
+    Type: String
+    Default: "ny_taxi"
+
+  ProjectBucket:
+    Description: "Name of S3 bucket where glue scripts are stored"
+    Type: String
+
+  DataBucket:
+    Description: "Name of S3 bucket where data is stored"
+    Type: String
+
+  EltRoleName:
+    Description: "Name of role for executing Glue jobs"
+    Type: String
+
+  EltRoleArn:
+    Description: "ARN of role for executing Glue jobs"
+    Type: String
+
+  JobConfigTable:
+    Description: "ARN of Dynamo DB table for job config"
+    Type: String
+
+  JobNotificationTopic:
+    Description: "ARN of SNS topic for job config"
+    Type: String
+
+  EventBus:
+    Description: "Name of S3 write event bus"
+    Type: String
+
+  CryptKeyId:
+    Description: "Id of KMS encryption/decryption key"
+    Type: String
+
+  CryptKeyArn:
+    Description: "ARN of KMS encryption/decryption key"
+    Type: String
+
+
+Transform: "AWS::LanguageExtensions"
+
+
+Resources:
+#
+#  GlueJob:
+#    Type: "AWS::Glue::Job"
+#    Properties:
+#      Command:
+#        Name: "glueetl"
+#        PythonVersion: "3.9"
+#        ScriptLocation: !Sub "${GlueAssetsFolder}/scripts/${JobName}.py"
+#      DefaultArguments:
+#        - Key: "--datalake-formats"
+#          Value: "iceberg"
+#        - Key: "--enable-auto-scaling"
+#          Value: true
+#        - Key: "--enable-continuous-log-filter"
+#          Value:  true
+#        - Key: "--enable-job-insights"
+#          Value: true
+#        - Key: "--enable-metrics"
+#          Value: true
+#        - Key: "--enable-spark-ui"
+#          Value: true
+#        - Key: "--job-language"
+#          Value: "python"
+#        - Key: "--spark-event-logs-path"
+#          Value: !Sub "${GlueAssetsFolder}/event-logs/"
+#        - Key: "--TempDir"
+#          Value: !Sub "${GlueAssetsFolder}/temp/"
+#      Description: "ELT job for NYC taxis"
+#      ExecutionClass: "STANDARD"
+#      ExecutionProperty:
+#        MaxConcurrentRuns: 1
+#      GlueVersion: "4.0"
+#      MaxCapacity: 5
+#      MaxRetries: 0
+#      Name: !Sub "${ProjectNameParam}-${JobName}-${ResourceRandom}-${EnvParam}"
+#      NonOverridableArguments:
+#        - Key: "--datalake-formats"
+#          Value: "iceberg"
+#        - Key: "--enable-auto-scaling"
+#          Value: true
+#        - Key: "--enable-continuous-log-filter"
+#          Value: true
+#        - Key: "--enable-job-insights"
+#          Value: true
+#        - Key: "--enable-metrics"
+#          Value: true
+#        - Key: "--enable-spark-ui"
+#          Value: true
+#        - Key: "--job-language"
+#          Value: "python"
+#        - Key: "--spark-event-logs-path"
+#          Value: !Sub "${GlueAssetsFolder}/event-logs/"
+#        - Key: "--TempDir"
+#          Value: !Sub "${GlueAssetsFolder}/temp/"
+#      NotificationProperty:
+#        NotifyDelayAfter: 2
+#      NumberOfWorkers: 2
+#      Role: !Ref EltRole
+#      Tags:
+#        - Key: Name
+#          Value: !Sub "${ProjectNameParam}-${JobName}-${ResourceRandom}-${EnvParam}"
+#        - Key: project
+#          Value: !Ref ProjectNameParam
+#        - Key: env
+#          Value: !Ref EnvParam
+#      WorkerType: "Standard"
+
+  EventRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: "Write to S3 location"
+      EventBusName:
+        Fn::ImportValue: !Ref EventBus
+      EventPattern:
+        source:
+          - "aws.s3"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "s3.amazonaws.com"
+          eventName:
+            - "PutObject"
+            - "CompleteMultipartUpload"
+          requestParameters:
+            bucketName:
+              - Fn::ImportValue: !Ref DataBucket
+            key:
+              - prefix: !Sub "${JobName}/"
+      Name: !Sub "${ProjectNameParam}-${JobName}-s3-obj-write-${ResourceRandom}-${EnvParam}"
+      RoleArn:
+        Fn::ImportValue: !Ref EltRoleArn
+      State: "ENABLED"
+      Targets:
+        - Arn: !Ref JobStateMachine
+          Id: !Sub "${ProjectNameParam}-${JobName}-s3-obj-write-${ResourceRandom}-${EnvParam}"
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 300
+            MaximumRetryAttempts: 3
+          RoleArn:
+            Fn::ImportValue: !Ref EltRoleArn
+
+  CloudWatchLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "${ProjectNameParam}-${JobName}-log-group-${ResourceRandom}-${EnvParam}"
+      RetentionInDays: 365
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectNameParam}-${JobName}-log-group-${ResourceRandom}-${EnvParam}"
+        - Key: project
+          Value: !Ref ProjectNameParam
+        - Key: env
+          Value: !Ref EnvParam
+
+
+  CloudTrail:
+    Type: "AWS::CloudTrail::Trail"
+    Properties:
+      CloudWatchLogsLogGroupArn: !GetAtt CloudWatchLogGroup.Arn
+      CloudWatchLogsRoleArn:
+            Fn::ImportValue: !Ref EltRoleArn
+      EventSelectors:
+        - DataResources:
+            - Type: "AWS::S3::Object"
+              Values:
+                - Fn::Sub:
+                  - "${bucket}/${key_prefix}/"
+                  - bucket:
+                      Fn::ImportValue: !Ref DataBucket
+                    key_prefix: !Ref JobName
+          ReadWriteType: "WriteOnly"
+      IsLogging: true
+#      KMSKeyId: String
+      S3BucketName: !Sub "aws-cloudtrail-logs-${AWS::AccountId}-79fe4cd6"
+      S3KeyPrefix: !Sub "AWSLogs/${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectNameParam}-${JobName}-trail-${ResourceRandom}-${EnvParam}"
+        - Key: project
+          Value: !Ref ProjectNameParam
+        - Key: env
+          Value: !Ref EnvParam
+      TrailName: !Sub "${ProjectNameParam}-${JobName}-trail-${ResourceRandom}-${EnvParam}"
+
+
+  JobStateMachine:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      Definition:
+        Comment: !Sub "State Machine for controlling ${ProjectNameParam}-${JobName}"
+        StartAt: "PutObject"
+        States:
+          PutObject:
+            Type: "Task"
+            Parameters:
+              Body: { }
+              Bucket:
+                Fn::ImportValue: !Ref DataBucket
+              Key: !Sub "${JobName}/test.csv"
+            Resource: "arn:aws:states:::aws-sdk:s3:putObject"
+            Next: "PutItem"
+          PutItem:
+            Type: "Task"
+            Resource: "arn:aws:states:::dynamodb:putItem"
+            Parameters:
+              "TableName":
+                Fn::ImportValue: !Ref JobConfigTable
+              Item:
+                s3_path:
+                  S: !Sub "${DataBucket}/${JobName}/" #TODO: Read this from event
+                date_created:
+                  S: "2023-04-10" #TODO: Read this from event
+                execution_retry_count:
+                  N: "0"
+                execution_status:
+                  S: "None"
+            "End": true
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt CloudWatchLogGroup.Arn
+        IncludeExecutionData: true
+        Level: "ALL"
+      RoleArn:
+        Fn::ImportValue: !Ref EltRoleArn
+      StateMachineName: !Sub "${ProjectNameParam}-${JobName}-state-machine-${ResourceRandom}-${EnvParam}"
+      StateMachineType: "STANDARD"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectNameParam}-${JobName}-state-machine-${ResourceRandom}-${EnvParam}"
+        - Key: project
+          Value: !Ref ProjectNameParam
+        - Key: env
+          Value: !Ref EnvParam
+      TracingConfiguration:
+        Enabled: true
+
+
